@@ -4,8 +4,10 @@
 - 日出：本週收盤 > 上週最高點
 - 日落：本週收盤 < 上週最低點
 - 布林通道：20 週收盤平均（中軌）± 2 倍標準差
-- 建議進場：本週出現日出，且收盤在布林中軌之上
-- 不建議進場：本週出現日落
+- MACD(12,26,9)：DIF > 訊號線 為多頭
+- KD(9,3,3)：K > D 為多頭
+- 建議進場：本週出現日出，且收盤在布林中軌之上、MACD 多頭、KD 多頭
+- 不建議進場：本週出現日落，且 MACD 或 KD 至少一個轉弱
 """
 import csv
 import json
@@ -20,6 +22,8 @@ RAW = ROOT / "data" / "raw"
 OUT = ROOT / "site" / "data"
 TPE = timezone(timedelta(hours=8))
 BB_N, BB_K = 20, 2
+MACD_FAST, MACD_SLOW, MACD_SIG = 12, 26, 9
+KD_N = 9
 TOP_N = 20
 
 
@@ -78,7 +82,39 @@ def analyze(bars):
         if b["flip"]:
             state, since = b["event"], b["week"]
         b["state"], b["since"] = state, since
+    add_macd(bars)
+    add_kd(bars)
     return bars
+
+
+def add_macd(bars):
+    """MACD：DIF = EMA12 − EMA26，訊號線 = DIF 的 EMA9，柱狀 = DIF − 訊號線。"""
+    a = lambda n: 2 / (n + 1)
+    fast = slow = sig = None
+    warmup = MACD_SLOW + MACD_SIG - 2  # 資料太少時指標不可靠，先不判斷
+    for i, b in enumerate(bars):
+        c = b["c"]
+        fast = c if fast is None else fast + a(MACD_FAST) * (c - fast)
+        slow = c if slow is None else slow + a(MACD_SLOW) * (c - slow)
+        dif = fast - slow
+        sig = dif if sig is None else sig + a(MACD_SIG) * (dif - sig)
+        ready = i >= warmup
+        b["dif"], b["dea"], b["osc"] = (dif, sig, dif - sig) if ready else (None, None, None)
+
+
+def add_kd(bars):
+    """KD（台股常用）：RSV = (收盤 − 9週最低) / (9週最高 − 9週最低)；K、D 各以 1/3 平滑，起始 50。"""
+    k = d = 50.0
+    for i, b in enumerate(bars):
+        if i + 1 < KD_N:
+            b["k"] = b["d"] = None
+            continue
+        win = bars[i + 1 - KD_N:i + 1]
+        hi, lo = max(x["h"] for x in win), min(x["l"] for x in win)
+        rsv = (b["c"] - lo) / (hi - lo) * 100 if hi > lo else 50
+        k = k * 2 / 3 + rsv / 3
+        d = d * 2 / 3 + k / 3
+        b["k"], b["d"] = k, d
 
 
 def status(bars, i):
@@ -88,6 +124,8 @@ def status(bars, i):
     b = bars[i]
     prev_mid = bars[i - 1]["mid"] if i > 0 else None
     above = b["mid"] is not None and b["c"] > b["mid"]
+    macd_bull = b["dif"] is not None and b["dif"] > b["dea"]
+    kd_bull = b["k"] is not None and b["k"] > b["d"]
     return {
         "start": b["start"].isoformat(), "end": b["end"].isoformat(),
         "close": r2(b["c"]), "chg": r2(b["chg"]), "vol": round(b["v"] / 1000),
@@ -97,7 +135,12 @@ def status(bars, i):
         "above_mid": above,
         "mid_up": b["mid"] is not None and prev_mid is not None and b["mid"] > prev_mid,
         "bb_ready": b["mid"] is not None,
-        "ok": b["state"] == "rise" and above,  # 個股頁的進場結論
+        "dif": r2(b["dif"]), "dea": r2(b["dea"]), "osc": r2(b["osc"]), "macd_bull": macd_bull,
+        "k": r2(b["k"]), "d": r2(b["d"]), "kd_bull": kd_bull,
+        "ind_ready": b["dif"] is not None and b["k"] is not None,
+        "ok": b["state"] == "rise" and above and macd_bull and kd_bull,  # 個股頁的進場結論
+        "buy": b["event"] == "rise" and above and macd_bull and kd_bull,  # 首頁「建議進場」
+        "avoid": b["event"] == "set" and (not macd_bull or not kd_bull),  # 首頁「不建議進場」
     }
 
 
@@ -120,6 +163,8 @@ def export(code, name, bars):
         "code": code, "name": name,
         "bars": [[b["start"].isoformat(), r2(b["o"]), r2(b["h"]), r2(b["l"]), r2(b["c"]), round(b["v"] / 1000)] for b in bars],
         "bb": [[b["start"].isoformat(), r2(b["mid"]), r2(b["up"]), r2(b["lo"])] for b in bars if b["mid"] is not None],
+        "macd": [[b["start"].isoformat(), r2(b["dif"]), r2(b["dea"]), r2(b["osc"])] for b in bars if b["dif"] is not None],
+        "kd": [[b["start"].isoformat(), r2(b["k"]), r2(b["d"])] for b in bars if b["k"] is not None],
         "events": [[b["start"].isoformat(), b["event"]] for b in bars if b["flip"]],
         "final": status(bars, fi),
         "prov": status(bars, last) if last != fi else None,  # 本週暫定
@@ -167,9 +212,9 @@ def main():
             continue
         s = status(bars, fi)
         item = {"code": code, "name": names[code], "close": s["close"], "chg": s["chg"], "vol": s["vol"]}
-        if s["event"] == "rise" and s["above_mid"]:
+        if s["buy"]:
             buy.append(item)
-        elif s["event"] == "set":
+        elif s["avoid"]:
             avoid.append(item)
 
     summary = {

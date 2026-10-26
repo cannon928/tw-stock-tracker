@@ -2,7 +2,7 @@
 const $ = (s) => document.querySelector(s);
 const app = $("#app");
 let summary = null;
-let chart = null;
+let charts = [];
 
 const fmt = (x, d = 2) => (x == null ? "—" : Number(x).toLocaleString("zh-TW", { minimumFractionDigits: d, maximumFractionDigits: d }));
 const pct = (x) => (x == null ? "—" : (x > 0 ? "+" : "") + x.toFixed(2) + "%");
@@ -44,8 +44,8 @@ function renderHome() {
       <span class="muted">依 ${md(s.week.start)}–${md(s.week.end)} 週K收盤判斷</span>
     </div>
     <div class="lists">
-      ${listCard("up", "本週建議進場", "週K日出 ＋ 收盤在布林中軌之上", s.buy, s.counts.buy)}
-      ${listCard("down", "本週不建議進場", "週K日落（收盤跌破上週最低點）", s.avoid, s.counts.avoid)}
+      ${listCard("up", "本週建議進場", "週K日出 ＋ 布林中軌之上 ＋ MACD 多頭 ＋ KD 多頭", s.buy, s.counts.buy)}
+      ${listCard("down", "本週不建議進場", "週K日落 ＋ MACD 或 KD 轉弱", s.avoid, s.counts.avoid)}
     </div>`;
   app.querySelectorAll("tr[data-code]").forEach((tr) => tr.addEventListener("click", () => (location.hash = "#/" + tr.dataset.code)));
 }
@@ -83,13 +83,17 @@ async function renderStock(code) {
   const p = d.prov;
   const isIdx = code === "TAIEX";
   const ok = f.ok;
-  const reason = !f.bb_ready
-    ? "上市未滿 20 週，布林通道資料不足"
+  const missing = [
+    f.state !== "rise" && (f.state === "set" ? "週K處於日落狀態" : "尚未出現日出訊號"),
+    !f.above_mid && "收盤在布林中軌之下",
+    !f.macd_bull && "MACD 偏空",
+    !f.kd_bull && "KD 偏空",
+  ].filter(Boolean);
+  const reason = !f.bb_ready || !f.ind_ready
+    ? "上市時間太短，指標資料不足"
     : ok
-    ? `週K處於日出狀態，且收盤在布林中軌之上`
-    : f.state !== "rise"
-    ? f.state === "set" ? "週K處於日落狀態" : "尚未出現日出訊號"
-    : "雖在日出狀態，但收盤跌回布林中軌之下";
+    ? "日出、布林、MACD、KD 四項條件全部符合"
+    : "未符合：" + missing.join("、");
 
   const check = (met, title, sub) => `<li><span class="dot ${met ? "up" : "down"}">${met ? "✓" : "✗"}</span>
     <div><div class="t">${title}</div><div class="s">${sub}</div></div></li>`;
@@ -112,6 +116,10 @@ async function renderStock(code) {
           <span>▲日出　▼日落</span>
         </div>
         <div id="chart"></div>
+        <div class="legend sub-legend">MACD(12,26,9)　<span><i style="background:#f0b90b"></i>DIF</span><span><i style="background:#5b8def"></i>訊號線</span></div>
+        <div id="macd" class="sub-chart"></div>
+        <div class="legend sub-legend">KD(9,3,3)　<span><i style="background:#f0b90b"></i>K</span><span><i style="background:#5b8def"></i>D</span></div>
+        <div id="kd" class="sub-chart"></div>
       </div>
       <div class="side">
         <div class="card">
@@ -119,11 +127,15 @@ async function renderStock(code) {
           <ul class="checks">
             ${check(f.state === "rise", "週K處於日出狀態", f.state ? `${STATE[f.state].text}，自 ${md(f.since)} 那週開始` : "尚無日出或日落訊號")}
             ${check(f.above_mid, "收盤在布林中軌之上", `收盤 ${fmt(f.close)}／中軌 ${fmt(f.mid)}`)}
+            ${check(f.macd_bull, "MACD 多頭", `DIF ${fmt(f.dif)} ${f.macd_bull ? "高於" : "低於"}訊號線 ${fmt(f.dea)}`)}
+            ${check(f.kd_bull, "KD 多頭", `K ${fmt(f.k, 1)} ${f.kd_bull ? "高於" : "低於"} D ${fmt(f.d, 1)}`)}
           </ul>
           <p class="sub">參考指標（不影響結論）</p>
           <ul class="checks">
             ${check(f.event === "rise", "本週剛出現日出", `收盤 ${fmt(f.close)} vs 上週高點 ${fmt(f.prev_high)}`)}
             ${check(f.mid_up, "布林中軌方向向上", "中軌上揚代表中期趨勢偏多")}
+            ${check(f.osc > 0, "MACD 柱狀體為正", `柱狀 ${fmt(f.osc)}`)}
+            ${check(f.k != null && f.k < 80, "KD 未過熱（K < 80）", f.k >= 80 ? "K 值偏高，追高要小心" : f.k <= 20 ? "K 值低於 20，處於超賣區" : `K ${fmt(f.k, 1)}`)}
           </ul>
         </div>
         ${p ? provCard(p) : ""}
@@ -155,30 +167,30 @@ function provCard(p) {
   </div>`;
 }
 
+const CHART_OPTS = {
+  autoSize: true,
+  layout: { background: { color: "transparent" }, textColor: "#868b98", fontSize: 11 },
+  grid: { vertLines: { color: "#22262f" }, horzLines: { color: "#22262f" } },
+  rightPriceScale: { borderColor: "#2a2e39", minimumWidth: 72 },  // 三張圖右側同寬，K棒才會上下對齊
+  timeScale: { borderColor: "#2a2e39" },
+  crosshair: { mode: 0 },
+  localization: { locale: "zh-TW" },
+};
+const plain = { lineWidth: 1, priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false };
+
 function drawChart(d) {
-  if (chart) chart.remove();
-  const el = $("#chart");
-  chart = LightweightCharts.createChart(el, {
-    autoSize: true,
-    layout: { background: { color: "transparent" }, textColor: "#868b98", fontSize: 11 },
-    grid: { vertLines: { color: "#22262f" }, horzLines: { color: "#22262f" } },
-    rightPriceScale: { borderColor: "#2a2e39" },
-    timeScale: { borderColor: "#2a2e39" },
-    crosshair: { mode: 0 },
-    localization: { locale: "zh-TW" },
-  });
-  const candles = chart.addCandlestickSeries({
+  charts.forEach((c) => c.remove());
+  const main = LightweightCharts.createChart($("#chart"), CHART_OPTS);
+  const candles = main.addCandlestickSeries({
     upColor: "#f23645", downColor: "#089981", borderUpColor: "#f23645", borderDownColor: "#089981",
     wickUpColor: "#f23645", wickDownColor: "#089981",
   });
   candles.setData(d.bars.map(([t, o, h, l, c]) => ({ time: t, open: o, high: h, low: l, close: c })));
-  const line = (color, i, style = 0) => {
-    const s = chart.addLineSeries({ color, lineWidth: 1, lineStyle: style, priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false });
-    s.setData(d.bb.map((r) => ({ time: r[0], value: r[i] })));
-  };
-  line("#f0b90b", 1);
-  line("#5b8def", 2, 2);
-  line("#5b8def", 3, 2);
+  const bbLine = (color, i, style = 0) =>
+    main.addLineSeries({ ...plain, color, lineStyle: style }).setData(d.bb.map((r) => ({ time: r[0], value: r[i] })));
+  bbLine("#f0b90b", 1);
+  bbLine("#5b8def", 2, 2);
+  bbLine("#5b8def", 3, 2);
   candles.setMarkers(
     d.events.map(([t, e]) =>
       e === "rise"
@@ -187,14 +199,46 @@ function drawChart(d) {
     )
   );
   if (d.code !== "TAIEX") {
-    const vol = chart.addHistogramSeries({ priceScaleId: "vol", priceFormat: { type: "volume" }, lastValueVisible: false, priceLineVisible: false });
-    chart.priceScale("vol").applyOptions({ scaleMargins: { top: 0.82, bottom: 0 } });
+    const vol = main.addHistogramSeries({ priceScaleId: "vol", priceFormat: { type: "volume" }, lastValueVisible: false, priceLineVisible: false });
+    main.priceScale("vol").applyOptions({ scaleMargins: { top: 0.82, bottom: 0 } });
     vol.setData(d.bars.map(([t, o, , , c, v]) => ({ time: t, value: v, color: c >= o ? "rgba(242,54,69,.35)" : "rgba(8,153,129,.35)" })));
   }
+
+  // 副圖：指標前幾週還沒算出來的地方用空白補齊，讓每根K棒位置跟主圖一致
+  const times = d.bars.map((b) => b[0]);
+  const series = (rows, i, map = (v) => ({ value: v })) => {
+    const byTime = new Map(rows.map((r) => [r[0], r[i]]));
+    return times.map((t) => (byTime.has(t) ? { time: t, ...map(byTime.get(t)) } : { time: t }));
+  };
+
+  const macd = LightweightCharts.createChart($("#macd"), CHART_OPTS);
+  macd.addHistogramSeries({ priceLineVisible: false, lastValueVisible: false })
+    .setData(series(d.macd, 3, (v) => ({ value: v, color: v >= 0 ? "rgba(242,54,69,.6)" : "rgba(8,153,129,.6)" })));
+  macd.addLineSeries({ ...plain, color: "#f0b90b" }).setData(series(d.macd, 1));
+  macd.addLineSeries({ ...plain, color: "#5b8def" }).setData(series(d.macd, 2));
+
+  const kd = LightweightCharts.createChart($("#kd"), CHART_OPTS);
+  const k = kd.addLineSeries({ ...plain, color: "#f0b90b" });
+  k.setData(series(d.kd, 1));
+  kd.addLineSeries({ ...plain, color: "#5b8def" }).setData(series(d.kd, 2));
+  [80, 20].forEach((p) => k.createPriceLine({ price: p, color: "#3a3f4b", lineWidth: 1, lineStyle: 2, axisLabelVisible: false }));
+
+  charts = [main, macd, kd];
+  // 三張圖一起捲動、縮放
+  let syncing = false;
+  charts.forEach((c) =>
+    c.timeScale().subscribeVisibleLogicalRangeChange((r) => {
+      if (syncing || !r) return;
+      syncing = true;
+      charts.forEach((o) => o !== c && o.timeScale().setVisibleLogicalRange(r));
+      syncing = false;
+    })
+  );
+
   // 預設顯示最近約一年（手機半年）；等圖表量好寬度後再設定
   const n = d.bars.length;
-  const span = el.clientWidth < 500 ? 26 : 52;
-  requestAnimationFrame(() => chart.timeScale().setVisibleLogicalRange({ from: Math.max(0, n - span), to: n + 1 }));
+  const span = $("#chart").clientWidth < 500 ? 26 : 52;
+  requestAnimationFrame(() => main.timeScale().setVisibleLogicalRange({ from: Math.max(0, n - span), to: n + 1 }));
 }
 
 // ---------- 搜尋 ----------
