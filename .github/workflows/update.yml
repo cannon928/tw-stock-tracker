@@ -1,0 +1,52 @@
+# 每個交易日收盤後：抓新資料 → 存回專案 → 重算訊號 → 發佈網頁
+name: 每日更新
+
+on:
+  schedule:
+    - cron: "30 8 * * 1-6"   # 台北 16:30（週一到週六，週六用來定案遇到週五休市的週K）
+    - cron: "0 11 * * 1-5"   # 台北 19:00 補跑一次，以防證交所資料晚公布
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pages: write
+  id-token: write
+
+concurrency:
+  group: update
+  cancel-in-progress: false
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: 抓新資料
+        run: python scripts/fetch.py
+
+      - name: 存回專案
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add data/raw
+          git diff --cached --quiet || (git commit -m "資料更新 $(TZ=Asia/Taipei date +%F)" && git push)
+
+      - name: 計算訊號
+        run: python scripts/build.py
+
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+      - id: deploy
+        uses: actions/deploy-pages@v4
