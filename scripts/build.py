@@ -8,6 +8,8 @@
 - KD(9,3,3)：K > D 為多頭
 - 建議進場：本週出現日出，且收盤在布林中軌之上、MACD 多頭、KD 多頭
 - 不建議進場：本週出現日落，且 MACD 或 KD 至少一個轉弱
+- 反彈觀察：KD 低檔黃金交叉、跌破布林下軌後收回、MACD 綠柱連續縮短、負乖離過大（任一項）
+- 過熱警示：KD 高檔死亡交叉、衝出布林上軌後跌回、MACD 紅柱連續縮短、正乖離過大（任一項）
 """
 import csv
 import json
@@ -24,6 +26,8 @@ TPE = timezone(timedelta(hours=8))
 BB_N, BB_K = 20, 2
 MACD_FAST, MACD_SLOW, MACD_SIG = 12, 26, 9
 KD_N = 9
+KD_LOW, KD_HIGH = 20, 80   # KD 低檔／高檔
+BIAS_LIMIT = 20            # 收盤離 20 週均線超過 ±20% 視為乖離過大
 TOP_N = 20
 
 
@@ -141,7 +145,45 @@ def status(bars, i):
         "ok": b["state"] == "rise" and above and macd_bull and kd_bull,  # 個股頁的進場結論
         "buy": b["event"] == "rise" and above and macd_bull and kd_bull,  # 首頁「建議進場」
         "avoid": b["event"] == "set" and (not macd_bull or not kd_bull),  # 首頁「不建議進場」
+        "bias": r2((b["c"] / b["mid"] - 1) * 100) if b["mid"] else None,
+        **turn_signals(bars, i),
     }
+
+
+def turn_signals(bars, i):
+    """反彈／過熱訊號（觀察用，不影響進場結論）。回傳各自觸發的項目代號。"""
+    rebound, hot = [], []
+    if i < 2:
+        return {"rebound": rebound, "hot": hot}
+    b, p, pp = bars[i], bars[i - 1], bars[i - 2]
+    if None not in (b["k"], p["k"]):
+        if p["k"] <= p["d"] and b["k"] > b["d"] and min(p["k"], b["k"]) < KD_LOW:
+            rebound.append("kd_cross")      # KD 低檔黃金交叉
+        if p["k"] >= p["d"] and b["k"] < b["d"] and max(p["k"], b["k"]) > KD_HIGH:
+            hot.append("kd_cross")          # KD 高檔死亡交叉
+    if None not in (b["lo"], p["lo"]):
+        if p["c"] < p["lo"] and b["c"] > b["lo"]:
+            rebound.append("bb_back")       # 跌破布林下軌後收回
+        if p["c"] > p["up"] and b["c"] < b["up"]:
+            hot.append("bb_back")           # 衝出布林上軌後跌回
+    if None not in (b["osc"], p["osc"], pp["osc"]):
+        if pp["osc"] < p["osc"] < b["osc"] < 0:
+            rebound.append("macd_shrink")   # MACD 綠柱連續兩週縮短
+        if pp["osc"] > p["osc"] > b["osc"] > 0:
+            hot.append("macd_shrink")       # MACD 紅柱連續兩週縮短
+    if b["mid"]:
+        bias = (b["c"] / b["mid"] - 1) * 100
+        if bias < -BIAS_LIMIT:
+            rebound.append("bias")          # 負乖離過大（跌深）
+        if bias > BIAS_LIMIT:
+            hot.append("bias")              # 正乖離過大（漲多）
+    return {"rebound": rebound, "hot": hot}
+
+
+def turn_rank(x):
+    """反彈／過熱清單排序：同時出現的訊號越多越前面，其次看有沒有較強的訊號，再看成交量。"""
+    strong = any(t in ("kd_cross", "bb_back") for t in x["tags"])
+    return (-len(x["tags"]), not strong, -x["vol"])
 
 
 def r2(x):
@@ -204,7 +246,7 @@ def main():
     final_week = idx_bars[idx_fi]["week"]
 
     daily, names, last_day = load_stocks()
-    buy, avoid = [], []
+    buy, avoid, rebound, hot = [], [], [], []
     for code, rows in daily.items():
         bars = analyze(to_weekly(rows))
         fi = export(code, names[code], bars)
@@ -216,6 +258,10 @@ def main():
             buy.append(item)
         elif s["avoid"]:
             avoid.append(item)
+        if s["rebound"]:
+            rebound.append({**item, "tags": s["rebound"]})
+        if s["hot"]:
+            hot.append({**item, "tags": s["hot"]})
 
     summary = {
         "updated": last_day.isoformat(),
@@ -223,9 +269,11 @@ def main():
         "week": {"start": idx_bars[idx_fi]["start"].isoformat(), "end": idx_bars[idx_fi]["end"].isoformat()},
         "index": status(idx_bars, idx_fi),
         "index_prov": status(idx_bars, len(idx_bars) - 1) if idx_fi != len(idx_bars) - 1 else None,
-        "counts": {"buy": len(buy), "avoid": len(avoid)},
+        "counts": {"buy": len(buy), "avoid": len(avoid), "rebound": len(rebound), "hot": len(hot)},
         "buy": sorted(buy, key=lambda x: -x["vol"])[:TOP_N],
         "avoid": sorted(avoid, key=lambda x: -x["vol"])[:TOP_N],
+        "rebound": sorted(rebound, key=turn_rank)[:TOP_N],
+        "hot": sorted(hot, key=turn_rank)[:TOP_N],
         "stocks": sorted([[c, names[c]] for c in daily]),
     }
     (OUT / "summary.json").write_text(json.dumps(summary, ensure_ascii=False, separators=(",", ":")), encoding="utf-8")

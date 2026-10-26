@@ -14,6 +14,23 @@ const STATE = {
   rise: { text: "☀ 日出", cls: "up" },
   set: { text: "🌙 日落", cls: "down" },
 };
+// 反彈／過熱訊號的名稱（對應 build.py 的 turn_signals）
+const TURN = {
+  rebound: {
+    title: "反彈觀察", cls: "watch",
+    rule: "跌深可能反彈，出現任一項就列入（只供觀察，不是進場訊號）",
+    tags: { kd_cross: "KD低檔黃金交叉", bb_back: "跌破下軌後收回", macd_shrink: "MACD綠柱縮短", bias: "負乖離過大" },
+    desc: { kd_cross: "K 在 20 以下向上穿過 D", bb_back: "上週收在布林下軌之下，本週收回下軌之上", macd_shrink: "MACD 柱狀為負，且連續兩週縮短", bias: "收盤低於 20 週均線超過 20%" },
+  },
+  hot: {
+    title: "過熱警示", cls: "hot",
+    rule: "漲多可能拉回，出現任一項就列入（持有者留意）",
+    tags: { kd_cross: "KD高檔死亡交叉", bb_back: "衝出上軌後跌回", macd_shrink: "MACD紅柱縮短", bias: "正乖離過大" },
+    desc: { kd_cross: "K 在 80 以上向下穿過 D", bb_back: "上週收在布林上軌之上，本週跌回上軌之下", macd_shrink: "MACD 柱狀為正，且連續兩週縮短", bias: "收盤高於 20 週均線超過 20%" },
+  },
+};
+const tagChips = (kind, tags) => tags.map((t) => `<span class="chip ${TURN[kind].cls}">${TURN[kind].tags[t]}</span>`).join("");
+
 const badge = (k, suffix = "") =>
   k ? `<span class="badge ${STATE[k].cls}">${STATE[k].text}${suffix}</span>` : `<span class="badge none">尚無訊號</span>`;
 
@@ -37,6 +54,7 @@ function renderHome() {
       <div class="idx-state">
         <div class="label">大盤目前狀態</div>
         ${badge(idx.state)} <span class="badge ${idx.above_mid ? "up" : "down"}">${idx.above_mid ? "中軌之上" : "中軌之下"}</span>
+        ${idx.rebound.length || idx.hot.length ? `<div class="idx-tags">${tagChips("rebound", idx.rebound)}${tagChips("hot", idx.hot)}</div>` : ""}
       </div>
     </a>
     <div class="week-title">
@@ -46,15 +64,23 @@ function renderHome() {
     <div class="lists">
       ${listCard("up", "本週建議進場", "週K日出 ＋ 布林中軌之上 ＋ MACD 多頭 ＋ KD 多頭", s.buy, s.counts.buy)}
       ${listCard("down", "本週不建議進場", "週K日落 ＋ MACD 或 KD 轉弱", s.avoid, s.counts.avoid)}
+    </div>
+    <div class="week-title section2">
+      <h1>反彈與過熱觀察</h1>
+      <span class="muted">依同時出現的訊號數、訊號強弱、成交量排序</span>
+    </div>
+    <div class="lists">
+      ${listCard(TURN.rebound.cls, TURN.rebound.title, TURN.rebound.rule, s.rebound, s.counts.rebound, "rebound")}
+      ${listCard(TURN.hot.cls, TURN.hot.title, TURN.hot.rule, s.hot, s.counts.hot, "hot")}
     </div>`;
   app.querySelectorAll("tr[data-code]").forEach((tr) => tr.addEventListener("click", () => (location.hash = "#/" + tr.dataset.code)));
 }
 
-function listCard(kind, title, rule, items, total) {
+function listCard(kind, title, rule, items, total, turn) {
   const rows = items
     .map(
       (x, i) => `<tr data-code="${x.code}">
-        <td><span class="rank">${i + 1}</span>${x.code}<span class="sname">${esc(x.name)}</span></td>
+        <td><span class="rank">${i + 1}</span>${x.code}<span class="sname">${esc(x.name)}</span>${turn ? `<div class="tags">${tagChips(turn, x.tags)}</div>` : ""}</td>
         <td class="num">${fmt(x.close)}</td>
         <td class="num ${cls(x.chg)}">${pct(x.chg)}</td>
         <td class="num hide-sm">${x.vol.toLocaleString()}</td></tr>`
@@ -63,7 +89,7 @@ function listCard(kind, title, rule, items, total) {
   return `<section class="card list">
     <div class="list-head ${kind}">
       <h2 class="${kind}">${title}</h2>
-      <p>${rule}｜共 ${total} 檔，依成交量列前 ${Math.min(20, total)} 檔</p>
+      <p>${rule}｜共 ${total} 檔，列前 ${Math.min(20, total)} 檔${turn ? "" : "（依成交量）"}</p>
     </div>
     ${items.length ? `<table><thead><tr><th>股票</th><th>收盤</th><th>週漲跌</th><th class="hide-sm">週量(張)</th></tr></thead><tbody>${rows}</tbody></table>` : `<div class="empty">本週沒有符合的股票</div>`}
   </section>`;
@@ -138,6 +164,7 @@ async function renderStock(code) {
             ${check(f.k != null && f.k < 80, "KD 未過熱（K < 80）", f.k >= 80 ? "K 值偏高，追高要小心" : f.k <= 20 ? "K 值低於 20，處於超賣區" : `K ${fmt(f.k, 1)}`)}
           </ul>
         </div>
+        ${turnCard(f)}
         ${p ? provCard(p) : ""}
         <div class="card">
           <h2>本週數據</h2>
@@ -153,6 +180,25 @@ async function renderStock(code) {
       </div>
     </div>`;
   drawChart(d);
+}
+
+function turnCard(f) {
+  const rows = (kind) =>
+    Object.keys(TURN[kind].tags)
+      .map((t) => {
+        const on = f[kind].includes(t);
+        return `<li><span class="dot ${on ? TURN[kind].cls : "off"}">${on ? "!" : ""}</span>
+          <div><div class="t">${TURN[kind].tags[t]}</div><div class="s">${TURN[kind].desc[t]}</div></div></li>`;
+      })
+      .join("");
+  return `<div class="card">
+    <h2>反彈／過熱訊號 <span class="muted" style="font-size:12px;font-weight:400">（觀察用）</span></h2>
+    <p class="sub">反彈觀察：出現 ${f.rebound.length} 項</p>
+    <ul class="checks">${rows("rebound")}</ul>
+    <p class="sub">過熱警示：出現 ${f.hot.length} 項</p>
+    <ul class="checks">${rows("hot")}</ul>
+    <p class="sub">目前乖離率（收盤 vs 20 週均線）：${f.bias == null ? "—" : pct(f.bias)}</p>
+  </div>`;
 }
 
 function provCard(p) {

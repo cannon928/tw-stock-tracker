@@ -10,6 +10,8 @@
   --up-bg: rgba(242, 54, 69, .14);
   --down-bg: rgba(8, 153, 129, .16);
   --accent: #f0b90b;
+  --watch: #f0b90b;   /* 反彈觀察 */
+  --hot: #ff7a2f;     /* 過熱警示 */
 }
 * { box-sizing: border-box; }
 html { -webkit-text-size-adjust: 100%; }
@@ -74,6 +76,16 @@ h2 { font-size: 17px; margin: 0; }
 .list-head { padding: 14px 18px; border-bottom: 1px solid var(--line); }
 .list-head.up { border-top: 3px solid var(--up); }
 .list-head.down { border-top: 3px solid var(--down); }
+.list-head.watch { border-top: 3px solid var(--watch); }
+.list-head.hot { border-top: 3px solid var(--hot); }
+h2.watch { color: var(--watch); }
+h2.hot { color: var(--hot); }
+.section2 { margin-top: 28px; }
+.tags { margin: 3px 0 0 22px; display: flex; flex-wrap: wrap; gap: 4px; }
+.idx-tags { margin-top: 6px; display: flex; flex-wrap: wrap; gap: 4px; justify-content: flex-end; }
+.chip { font-size: 11px; padding: 1px 7px; border-radius: 4px; white-space: nowrap; }
+.chip.watch { color: var(--watch); background: rgba(240, 185, 11, .12); }
+.chip.hot { color: var(--hot); background: rgba(255, 122, 47, .13); }
 .list-head p { margin: 2px 0 0; font-size: 12px; color: var(--muted); }
 table { width: 100%; border-collapse: collapse; }
 th, td { padding: 10px 12px; text-align: right; white-space: nowrap; }
@@ -115,6 +127,9 @@ tbody tr:hover { background: var(--card2); }
 .dot { flex: none; width: 22px; height: 22px; border-radius: 50%; display: grid; place-items: center; font-size: 13px; font-weight: 700; color: #fff; margin-top: 1px; }
 .dot.up { background: var(--up); }
 .dot.down { background: var(--down); }
+.dot.watch { background: var(--watch); color: #131722; }
+.dot.hot { background: var(--hot); }
+.dot.off { background: transparent; border: 1.5px solid #3a3f4b; }
 .checks .t { font-weight: 600; }
 .checks .s { font-size: 12px; color: var(--muted); }
 .sub { font-size: 12px; color: var(--muted); margin: 14px 0 0; }
@@ -130,6 +145,7 @@ tbody tr:hover { background: var(--card2); }
   .foot { padding: 8px 16px 32px; }
   .lists, .detail { grid-template-columns: 1fr; }
   .idx-state { text-align: left; }
+  .idx-tags { justify-content: flex-start; }
   #chart { height: 320px; }
   .sub-chart { height: 100px; }
   th, td { padding: 9px 8px; }
