@@ -73,30 +73,70 @@ function renderHome() {
       ${listCard(TURN.rebound.cls, TURN.rebound.title, TURN.rebound.rule, s.rebound, s.counts.rebound, "rebound")}
       ${listCard(TURN.hot.cls, TURN.hot.title, TURN.hot.rule, s.hot, s.counts.hot, "hot")}
     </div>`;
-  app.querySelectorAll("tr[data-code]").forEach((tr) => tr.addEventListener("click", () => (location.hash = "#/" + tr.dataset.code)));
+  app.onclick = onHomeClick;
 }
 
+// 首頁清單：點表頭可依收盤、週漲跌、週量排序（大→小 → 小→大 → 恢復原本順序）
+const homeLists = {};
+const SORT_COLS = [
+  ["close", "收盤"],
+  ["chg", "週漲跌"],
+  ["vol", "週量(張)"],
+];
+
 function listCard(kind, title, rule, items, total, turn) {
-  const rows = items
-    .map(
-      (x, i) => `<tr data-code="${x.code}">
-        <td><span class="rank">${i + 1}</span>${x.code}<span class="sname">${esc(x.name)}</span>${turn ? `<div class="tags">${tagChips(turn, x.tags)}</div>` : ""}</td>
-        <td class="num">${fmt(x.close)}</td>
-        <td class="num ${cls(x.chg)}">${pct(x.chg)}</td>
-        <td class="num hide-sm">${x.vol.toLocaleString()}</td></tr>`
-    )
-    .join("");
-  return `<section class="card list">
+  const key = title;
+  homeLists[key] = { items, turn, col: null, dir: 0 };
+  return `<section class="card list" data-list="${key}">
     <div class="list-head ${kind}">
       <h2 class="${kind}">${title}</h2>
       <p>${rule}｜共 ${total} 檔，列前 ${Math.min(20, total)} 檔${turn ? "" : "（依成交量）"}</p>
     </div>
-    ${items.length ? `<table><thead><tr><th>股票</th><th>收盤</th><th>週漲跌</th><th class="hide-sm">週量(張)</th></tr></thead><tbody>${rows}</tbody></table>` : `<div class="empty">本週沒有符合的股票</div>`}
+    ${items.length ? `<table><thead>${headRow(homeLists[key])}</thead><tbody>${listRows(homeLists[key])}</tbody></table>` : `<div class="empty">本週沒有符合的股票</div>`}
   </section>`;
+}
+
+function headRow(L) {
+  const th = SORT_COLS.map(([col, label]) => {
+    const arrow = L.col === col ? (L.dir < 0 ? " ▼" : " ▲") : " ⇅";
+    return `<th class="sortable${L.col === col ? " on" : ""}" data-sort="${col}">${label}<span class="arrow">${arrow}</span></th>`;
+  }).join("");
+  return `<tr><th>股票</th>${th}</tr>`;
+}
+
+function listRows(L) {
+  const items = L.col ? [...L.items].sort((a, b) => ((a[L.col] ?? 0) - (b[L.col] ?? 0)) * L.dir) : L.items;
+  return items
+    .map(
+      (x, i) => `<tr data-code="${x.code}">
+        <td><span class="rank">${i + 1}</span>${x.code}<span class="sname">${esc(x.name)}</span>${L.turn ? `<div class="tags">${tagChips(L.turn, x.tags)}</div>` : ""}</td>
+        <td class="num">${fmt(x.close)}</td>
+        <td class="num ${cls(x.chg)}">${pct(x.chg)}</td>
+        <td class="num">${x.vol.toLocaleString()}</td></tr>`
+    )
+    .join("");
+}
+
+function onHomeClick(e) {
+  const th = e.target.closest("th[data-sort]");
+  if (th) {
+    const sec = th.closest("[data-list]");
+    const L = homeLists[sec.dataset.list];
+    const col = th.dataset.sort;
+    if (L.col !== col) [L.col, L.dir] = [col, -1];
+    else if (L.dir < 0) L.dir = 1;
+    else [L.col, L.dir] = [null, 0];
+    sec.querySelector("thead").innerHTML = headRow(L);
+    sec.querySelector("tbody").innerHTML = listRows(L);
+    return;
+  }
+  const tr = e.target.closest("tr[data-code]");
+  if (tr) location.hash = "#/" + tr.dataset.code;
 }
 
 // ---------- 個股頁 ----------
 async function renderStock(code) {
+  app.onclick = null;
   app.innerHTML = `<p class="muted center">載入中…</p>`;
   let d;
   try {

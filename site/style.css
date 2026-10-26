@@ -92,6 +92,10 @@ th, td { padding: 10px 12px; text-align: right; white-space: nowrap; }
 th { color: var(--muted); font-weight: 400; font-size: 12px; border-bottom: 1px solid var(--line); }
 th:first-child, td:first-child { text-align: left; padding-left: 18px; }
 td:last-child, th:last-child { padding-right: 18px; }
+th.sortable { cursor: pointer; user-select: none; }
+th.sortable:hover, th.sortable.on { color: var(--text); }
+th .arrow { font-size: 10px; opacity: .6; }
+th.on .arrow { opacity: 1; color: var(--accent); }
 tbody tr { border-bottom: 1px solid var(--line); cursor: pointer; }
 tbody tr:last-child { border-bottom: 0; }
 tbody tr:hover { background: var(--card2); }
@@ -154,5 +158,8 @@ tbody tr:hover { background: var(--card2); }
   .verdict .big { font-size: 22px; }
 }
 @media (max-width: 420px) {
-  .hide-sm { display: none; }
+  th, td { padding: 8px 5px; font-size: 13px; }
+  th { font-size: 11px; }
+  .rank { width: 16px; }
+  .sname { display: block; margin-left: 16px; }
 }
