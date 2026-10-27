@@ -162,7 +162,11 @@ def fetch_actions():
     ]
     rows = set()
     for url, ccol, dcol, pcol, rcol in sources:
-        js = get_json(url)
+        try:
+            js = get_json(url)
+        except RuntimeError as e:  # 櫃買中心偶爾擋請求：沿用上次的資料，下次再更新
+            print(f"除權息／減資資料暫時抓不到，沿用上次的：{e}", file=sys.stderr, flush=True)
+            return
         if "tables" in js:  # 櫃買中心的格式
             js = (js["tables"] or [{}])[0]
         f = {name: i for i, name in enumerate(js.get("fields") or [])}
