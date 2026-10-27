@@ -142,7 +142,7 @@ async function renderStock(code) {
   try {
     d = await getJSON(`data/s/${code}.json`);
   } catch {
-    app.innerHTML = `<a class="back" href="#/">← 回首頁</a><p class="center muted">找不到「${esc(code)}」，請確認是上市股票代號。</p>`;
+    app.innerHTML = `<a class="back" href="#/">← 回首頁</a><p class="center muted">找不到「${esc(code)}」，請確認是上市或上櫃股票代號。</p>`;
     return;
   }
   const f = d.final;
@@ -167,7 +167,7 @@ async function renderStock(code) {
   app.innerHTML = `
     <a class="back" href="#/">← 回首頁</a>
     <div class="stock-head">
-      <h1>${esc(d.name)}</h1><span class="code">${isIdx ? "大盤" : code}</span>
+      <h1>${esc(d.name)}</h1><span class="code">${isIdx ? "大盤" : `${code}　${d.market}`}</span>
       <span class="price num">${fmt(f.close)}</span><span class="num ${cls(f.chg)}">${pct(f.chg)}</span>
     </div>
     <div class="verdict ${ok ? "up" : "down"}">
@@ -346,11 +346,12 @@ function showSuggest() {
   hits = search(q.value);
   active = 0;
   if (!hits.length) return (sug.hidden = true);
-  sug.innerHTML = hits.map(([c, n], i) => `<li data-code="${c}" class="${i === 0 ? "on" : ""}"><span class="code">${c === "TAIEX" ? "大盤" : c}</span>${esc(n)}</li>`).join("");
+  sug.innerHTML = hits.map(([c, n, m], i) => `<li data-code="${c}" class="${i === 0 ? "on" : ""}"><span class="code">${c === "TAIEX" ? "大盤" : c}</span>${esc(n)}<span class="mkt">${m || ""}</span></li>`).join("");
   sug.hidden = false;
 }
 
 function go(code) {
+  remember(code);
   sug.hidden = true;
   q.value = "";
   q.blur();
@@ -375,10 +376,54 @@ sug.addEventListener("mousedown", (e) => {
 });
 q.addEventListener("blur", () => setTimeout(() => (sug.hidden = true), 150));
 
+// ---------- 最近搜尋（存在這台裝置的瀏覽器裡） ----------
+const RECENT_KEY = "recentSearches";
+const RECENT_MAX = 10;
+
+function loadRecent() {
+  try {
+    return JSON.parse(localStorage.getItem(RECENT_KEY)) || [];
+  } catch {
+    return [];
+  }
+}
+
+function remember(code) {
+  if (code !== "TAIEX" && !summary.stocks.some((x) => x[0] === code)) return;  // 查無此股不記
+  const list = [code, ...loadRecent().filter((c) => c !== code)].slice(0, RECENT_MAX);
+  try {
+    localStorage.setItem(RECENT_KEY, JSON.stringify(list));
+  } catch {}
+}
+
+function renderRecent() {
+  const names = new Map([["TAIEX", "加權指數"], ...summary.stocks.map(([c, n]) => [c, n])]);
+  const list = loadRecent().filter((c) => names.has(c));
+  const current = location.hash.replace(/^#\/?/, "");
+  $("#recent").innerHTML = `
+    <div class="recent-head"><h2>最近搜尋</h2>${list.length ? `<button id="clear-recent" type="button">清除</button>` : ""}</div>
+    ${
+      list.length
+        ? `<ol>${list
+            .map((c) => `<li><a href="#/${c}" class="${c === current ? "on" : ""}"><span class="code">${c === "TAIEX" ? "大盤" : c}</span>${esc(names.get(c))}</a></li>`)
+            .join("")}</ol>`
+        : `<p class="muted">用上方搜尋欄查過的股票會出現在這裡</p>`
+    }`;
+  const btn = $("#clear-recent");
+  if (btn)
+    btn.onclick = () => {
+      try {
+        localStorage.removeItem(RECENT_KEY);
+      } catch {}
+      renderRecent();
+    };
+}
+
 // ---------- 路由 ----------
 function route() {
   const code = location.hash.replace(/^#\/?/, "");
   window.scrollTo(0, 0);
+  renderRecent();
   if (code) renderStock(code);
   else renderHome();
 }

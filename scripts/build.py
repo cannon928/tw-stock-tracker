@@ -13,6 +13,7 @@
 """
 import csv
 import json
+import math
 import shutil
 import statistics
 from collections import defaultdict
@@ -198,11 +199,11 @@ def final_index(bars):
     return None
 
 
-def export(code, name, bars):
+def export(code, name, bars, market=""):
     fi = final_index(bars)
     last = len(bars) - 1
     doc = {
-        "code": code, "name": name,
+        "code": code, "name": name, "market": market,
         "bars": [[b["start"].isoformat(), r2(b["o"]), r2(b["h"]), r2(b["l"]), r2(b["c"]), round(b["v"] / 1000)] for b in bars],
         "bb": [[b["start"].isoformat(), r2(b["mid"]), r2(b["up"]), r2(b["lo"])] for b in bars if b["mid"] is not None],
         "macd": [[b["start"].isoformat(), r2(b["dif"]), r2(b["dea"]), r2(b["osc"])] for b in bars if b["dif"] is not None],
@@ -215,16 +216,75 @@ def export(code, name, bars):
     return fi
 
 
+MARKETS = [("stocks", "上市"), ("otc", "上櫃")]
+
+
 def load_stocks():
-    daily, names = defaultdict(list), {}
-    for f in sorted((RAW / "stocks").glob("*.csv")):
-        d = datetime.strptime(f.stem, "%Y%m%d").date()
-        with f.open(encoding="utf-8") as fh:
+    """讀上市＋上櫃每日資料，並把分割、減資、除權息之前的價格還原（最新價格不變）。"""
+    raw, names, market = defaultdict(dict), {}, {}
+    trading_days = set()
+    for folder, label in MARKETS:
+        for f in sorted((RAW / folder).glob("*.csv")):
+            d = datetime.strptime(f.stem, "%Y%m%d").date()
+            with f.open(encoding="utf-8") as fh:
+                for r in csv.DictReader(fh):
+                    fl = lambda k: float(r[k]) if r.get(k) else None
+                    code = r["code"]
+                    if fl("close") is None:  # 沒成交
+                        continue
+                    raw[code][d] = (d, fl("open"), fl("high"), fl("low"), fl("close"), int(r["volume"]))
+                    names[code], market[code] = r["name"], label
+            trading_days.add(d)
+    trading_days = sorted(trading_days)
+
+    actions = defaultdict(list)  # 證交所、櫃買中心公布的除權息／減資／分割
+    if (RAW / "actions.csv").exists():
+        with (RAW / "actions.csv").open(encoding="utf-8") as fh:
             for r in csv.DictReader(fh):
-                fl = lambda k: float(r[k]) if r[k] else None
-                daily[r["code"]].append((d, fl("open"), fl("high"), fl("low"), float(r["close"]), int(r["volume"])))
-                names[r["code"]] = r["name"]
-    return daily, names, d
+                actions[r["code"]].append((date.fromisoformat(r["date"]), float(r["ref"]) / float(r["prev_close"])))
+
+    daily = {}
+    for code, by_day in raw.items():
+        rows = [by_day[d] for d in sorted(by_day)]
+        events = actions[code] + guess_splits(rows, actions[code], trading_days)
+        daily[code] = adjust(rows, events)
+    return daily, names, market, trading_days[-1]
+
+
+SPLIT_RATIOS = [1 / 2, 1 / 2.5, 1 / 4, 1 / 5, 1 / 8, 1 / 10, 1 / 20, 2, 2.5, 4, 5, 10]
+
+
+def guess_splits(rows, known, trading_days):
+    """櫃買中心沒有公開面額變更（分割）資料，用特徵辨識：
+    停止交易 2 天以上、恢復後股價跳動超過漲跌停限制，且接近 1/2、1/4、1/10 等整數比例，
+    又沒有官方公布的事件 → 視為分割，回傳 (恢復交易日, 比例)。"""
+    pos = {d: i for i, d in enumerate(trading_days)}
+    events = []
+    for (d0, *_, c0, _v0), (d1, *_, c1, _v1) in zip(rows, rows[1:]):
+        if pos[d1] - pos[d0] < 3 or 0.89 < c1 / c0 < 1.11:
+            continue
+        if any(d0 < when <= d1 for when, _ in known):
+            continue
+        ratio = c1 / c0
+        best = min(SPLIT_RATIOS, key=lambda r: abs(math.log(ratio / r)))
+        if abs(ratio / best - 1) < 0.12:
+            events.append((d1, best))
+    return events
+
+
+def adjust(rows, events):
+    """事件生效日之前的開高低收，乘上該事件的比例（多個事件連乘）。成交量不調整。"""
+    if not events:
+        return rows
+    out = []
+    for d, o, h, l, c, v in rows:
+        f = 1.0
+        for when, ratio in events:
+            if d < when:
+                f *= ratio
+        m = lambda x: x * f if x is not None else None
+        out.append((d, m(o), m(h), m(l), c * f, v))
+    return out
 
 
 def load_index():
@@ -245,11 +305,11 @@ def main():
     idx_fi = final_index(idx_bars)
     final_week = idx_bars[idx_fi]["week"]
 
-    daily, names, last_day = load_stocks()
+    daily, names, market, last_day = load_stocks()
     buy, avoid, rebound, hot = [], [], [], []
     for code, rows in daily.items():
         bars = analyze(to_weekly(rows))
-        fi = export(code, names[code], bars)
+        fi = export(code, names[code], bars, market[code])
         if fi is None or bars[fi]["week"] != final_week:  # 本週沒交易的股票不列入
             continue
         s = status(bars, fi)
@@ -274,7 +334,7 @@ def main():
         "avoid": sorted(avoid, key=lambda x: -x["vol"])[:TOP_N],
         "rebound": sorted(rebound, key=turn_rank)[:TOP_N],
         "hot": sorted(hot, key=turn_rank)[:TOP_N],
-        "stocks": sorted([[c, names[c]] for c in daily]),
+        "stocks": sorted([[c, names[c], market[c]] for c in daily]),
     }
     (OUT / "summary.json").write_text(json.dumps(summary, ensure_ascii=False, separators=(",", ":")), encoding="utf-8")
     print(f"完成：{len(daily)} 檔，定案週 {summary['week']}，建議 {len(buy)}、不建議 {len(avoid)}")

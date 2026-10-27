@@ -1,13 +1,13 @@
 # 週K日出日落
 
-台股上市股票的週K「日出／日落」＋布林通道追蹤網站。
+台股上市＋上櫃股票的週K「日出／日落」＋布林通道追蹤網站。
 
 - 日出：本週收盤 > 上週最高點；日落：本週收盤 < 上週最低點
 - 布林通道：20 週、2 倍標準差
 - MACD(12,26,9)、KD(9,3,3)
 - 建議進場：本週日出 + 中軌之上 + MACD 多頭 + KD 多頭；不建議進場：本週日落 + MACD 或 KD 轉弱（各依成交量列前 20）
 
-`scripts/fetch.py` 從證交所抓每日行情到 `data/raw/`，`scripts/build.py` 算出 `site/data/`。
+`scripts/fetch.py` 從證交所、櫃買中心抓每日行情與除權息／減資／分割資料到 `data/raw/`（價格計算時會還原），`scripts/build.py` 算出 `site/data/`。
 GitHub Actions 每個交易日收盤後自動執行並發佈到 GitHub Pages。
 
 僅供個人參考，不構成投資建議。
