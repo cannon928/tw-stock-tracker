@@ -47,9 +47,9 @@ function renderHome() {
   app.innerHTML = `
     <a class="card index-card" href="#/TAIEX">
       <div>
-        <div class="label">加權指數（週K）</div>
-        <div><span class="price num">${fmt(idx.close)}</span>
-          <span class="num ${cls(idx.chg)}">${pct(idx.chg)}</span></div>
+        <div class="label">加權指數（${md(s.index_last.date)} 收盤）</div>
+        <div><span class="price num">${fmt(s.index_last.close)}</span>
+          <span class="num ${cls(s.index_last.chg)}">${pct(s.index_last.chg)}</span></div>
       </div>
       <div class="idx-state">
         <div class="label">大盤目前狀態</div>
@@ -77,10 +77,11 @@ function renderHome() {
   app.onclick = onHomeClick;
 }
 
-// 首頁清單：點表頭可依收盤、週漲跌、週量排序（大→小 → 小→大 → 恢復原本順序）
+// 首頁清單：點表頭可依收盤、日漲跌、週漲跌、週量排序（大→小 → 小→大 → 恢復原本順序）
 const homeLists = {};
 const SORT_COLS = [
   ["close", "收盤"],
+  ["dchg", "日漲跌"],
   ["chg", "週漲跌"],
   ["vol", "週量(張)"],
 ];
@@ -91,7 +92,7 @@ function listCard(kind, title, rule, items, total, turn) {
   return `<section class="card list" data-list="${key}">
     <div class="list-head ${kind}">
       <h2 class="${kind}">${title}</h2>
-      <p>${rule}｜共 ${total} 檔，列前 ${Math.min(20, total)} 檔${turn ? "" : "（依成交量）"}</p>
+      <p>${rule}｜共 ${total} 檔，列前 ${Math.min(20, total)} 檔${turn ? "" : "（依成交量）"}｜收盤為 ${md(summary.updated)} 每日價格</p>
     </div>
     ${items.length ? `<table><thead>${headRow(homeLists[key])}</thead><tbody>${listRows(homeLists[key])}</tbody></table>` : `<div class="empty">本週沒有符合的股票</div>`}
   </section>`;
@@ -112,6 +113,7 @@ function listRows(L) {
       (x, i) => `<tr data-code="${x.code}">
         <td><span class="rank">${i + 1}</span>${x.code}<span class="sname">${esc(x.name)}</span>${L.turn ? `<div class="tags">${tagChips(L.turn, x.tags)}</div>` : ""}</td>
         <td class="num">${fmt(x.close)}</td>
+        <td class="num ${cls(x.dchg)}">${pct(x.dchg)}</td>
         <td class="num ${cls(x.chg)}">${pct(x.chg)}</td>
         <td class="num">${x.vol.toLocaleString()}</td></tr>`
     )
@@ -169,7 +171,8 @@ async function renderStock(code) {
     <a class="back" href="#/">← 回首頁</a>
     <div class="stock-head">
       <h1>${esc(d.name)}</h1><span class="code">${isIdx ? "大盤" : `${code}　${d.market}`}</span>
-      <span class="price num">${fmt(f.close)}</span><span class="num ${cls(f.chg)}">${pct(f.chg)}</span>
+      <span class="price num">${fmt(d.last.close)}</span><span class="num ${cls(d.last.chg)}">${pct(d.last.chg)}</span>
+      <span class="muted asof">${md(d.last.date)} 收盤</span>
     </div>
     <div class="verdict ${ok ? "up" : "down"}">
       <div class="big">${ok ? "✅ 符合進場條件" : "⛔ 不建議進場"}</div>
@@ -177,10 +180,15 @@ async function renderStock(code) {
     </div>
     <div class="detail">
       <div class="card chart-card">
-        <div class="legend">
-          <span><i style="background:#f0b90b"></i>中軌(20週)</span>
-          <span><i style="background:#5b8def"></i>上軌／下軌</span>
-          <span>▲日出　▼日落</span>
+        <div class="chart-top">
+          <div class="tabs" id="kmode">
+            <button type="button" data-mode="week">週K</button><button type="button" data-mode="day">日K</button>
+          </div>
+          <div class="legend">
+            <span><i style="background:#f0b90b"></i>中軌(20<span class="unit"></span>)</span>
+            <span><i style="background:#5b8def"></i>上軌／下軌</span>
+            <span class="marks">▲日出　▼日落</span>
+          </div>
         </div>
         <div id="chart"></div>
         <div class="legend sub-legend">MACD(12,26,9)　<span><i style="background:#f0b90b"></i>DIF</span><span><i style="background:#5b8def"></i>訊號線</span></div>
@@ -220,7 +228,60 @@ async function renderStock(code) {
         </div>
       </div>
     </div>`;
-  drawChart(d);
+  // 週K／日K 切換（記住上次的選擇）
+  let mode = "week";
+  try {
+    if (localStorage.getItem(MODE_KEY) === "day") mode = "day";
+  } catch {}
+  const setMode = (m) => {
+    mode = m;
+    try {
+      localStorage.setItem(MODE_KEY, m);
+    } catch {}
+    $("#kmode").querySelectorAll("button").forEach((b) => b.classList.toggle("on", b.dataset.mode === m));
+    $(".unit").textContent = m === "week" ? "週" : "日";
+    $(".marks").hidden = m !== "week";
+    drawChart(m === "week" ? d : dailyChart(d), m);
+  };
+  $("#kmode").onclick = (e) => e.target.dataset.mode && setMode(e.target.dataset.mode);
+  setMode(mode);
+}
+
+const MODE_KEY = "chartMode";
+
+// 日K 的布林(20日)、MACD(12,26,9)、KD(9,3,3)：算法跟 build.py 的週K 相同
+function dailyChart(d) {
+  const bars = d.days;
+  const c = bars.map((b) => b[4]);
+  const bb = [], macd = [], kd = [];
+  let fast, slow, sig, k = 50, dd = 50;
+  const a = (n) => 2 / (n + 1);
+  bars.forEach((b, i) => {
+    const t = b[0];
+    if (i >= 19) {
+      const win = c.slice(i - 19, i + 1);
+      const mid = win.reduce((x, y) => x + y) / 20;
+      const sd = Math.sqrt(win.reduce((x, y) => x + (y - mid) ** 2, 0) / 20);
+      bb.push([t, mid, mid + 2 * sd, mid - 2 * sd]);
+    }
+    fast = fast == null ? c[i] : fast + a(12) * (c[i] - fast);
+    slow = slow == null ? c[i] : slow + a(26) * (c[i] - slow);
+    const dif = fast - slow;
+    sig = sig == null ? dif : sig + a(9) * (dif - sig);
+    if (i >= 33) macd.push([t, dif, sig, dif - sig]);
+    if (i >= 8) {
+      const win = bars.slice(i - 8, i + 1);
+      const hi = Math.max(...win.map((x) => x[2] ?? x[4]));
+      const lo = Math.min(...win.map((x) => x[3] ?? x[4]));
+      const rsv = hi > lo ? ((c[i] - lo) / (hi - lo)) * 100 : 50;
+      k = (k * 2) / 3 + rsv / 3;
+      dd = (dd * 2) / 3 + k / 3;
+      kd.push([t, k, dd]);
+    }
+  });
+  // 沒有開高低的日子（只有收盤）用收盤補
+  const fixed = bars.map(([t, o, h, l, cl, v]) => [t, o ?? cl, h ?? cl, l ?? cl, cl, v]);
+  return { code: d.code, bars: fixed, bb, macd, kd, events: [] };
 }
 
 function turnCard(f) {
@@ -265,7 +326,7 @@ const CHART_OPTS = {
 };
 const plain = { lineWidth: 1, priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false };
 
-function drawChart(d) {
+function drawChart(d, mode) {
   charts.forEach((c) => c.remove());
   const main = LightweightCharts.createChart($("#chart"), CHART_OPTS);
   const candles = main.addCandlestickSeries({
@@ -322,9 +383,10 @@ function drawChart(d) {
     })
   );
 
-  // 預設顯示最近約一年（手機半年）；等圖表量好寬度後再設定
+  // 預設顯示：週K 約一年（手機半年）、日K 約半年（手機三個月）；等圖表量好寬度後再設定
   const n = d.bars.length;
-  const span = $("#chart").clientWidth < 500 ? 26 : 52;
+  const narrow = $("#chart").clientWidth < 500;
+  const span = mode === "day" ? (narrow ? 60 : 120) : narrow ? 26 : 52;
   requestAnimationFrame(() => main.timeScale().setVisibleLogicalRange({ from: Math.max(0, n - span), to: n + 1 }));
 }
 

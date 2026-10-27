@@ -199,11 +199,21 @@ def final_index(bars):
     return None
 
 
-def export(code, name, bars, market=""):
+def latest(daily):
+    """最新一個交易日的收盤、日漲跌、成交量（張）。"""
+    d, *_, c, v = daily[-1]
+    prev = daily[-2][4] if len(daily) > 1 else None
+    return {"date": d.isoformat(), "close": r2(c), "chg": r2((c / prev - 1) * 100) if prev else None, "vol": round(v / 1000)}
+
+
+def export(code, name, bars, daily, market=""):
     fi = final_index(bars)
     last = len(bars) - 1
     doc = {
         "code": code, "name": name, "market": market,
+        "last": latest(daily),
+        # 日K：指標由網頁端計算，檔案比較小
+        "days": [[d.isoformat(), r2(o), r2(h), r2(l), r2(c), round(v / 1000)] for d, o, h, l, c, v in daily],
         "bars": [[b["start"].isoformat(), r2(b["o"]), r2(b["h"]), r2(b["l"]), r2(b["c"]), round(b["v"] / 1000)] for b in bars],
         "bb": [[b["start"].isoformat(), r2(b["mid"]), r2(b["up"]), r2(b["lo"])] for b in bars if b["mid"] is not None],
         "macd": [[b["start"].isoformat(), r2(b["dif"]), r2(b["dea"]), r2(b["osc"])] for b in bars if b["dif"] is not None],
@@ -300,8 +310,9 @@ def main():
         shutil.rmtree(OUT)
     (OUT / "s").mkdir(parents=True)
 
-    idx_bars = analyze(to_weekly(load_index()))
-    export("TAIEX", "加權指數", idx_bars)
+    idx_daily = load_index()
+    idx_bars = analyze(to_weekly(idx_daily))
+    export("TAIEX", "加權指數", idx_bars, idx_daily)
     idx_fi = final_index(idx_bars)
     final_week = idx_bars[idx_fi]["week"]
 
@@ -309,11 +320,12 @@ def main():
     buy, avoid, rebound, hot = [], [], [], []
     for code, rows in daily.items():
         bars = analyze(to_weekly(rows))
-        fi = export(code, names[code], bars, market[code])
+        fi = export(code, names[code], bars, rows, market[code])
         if fi is None or bars[fi]["week"] != final_week:  # 本週沒交易的股票不列入
             continue
         s = status(bars, fi)
-        item = {"code": code, "name": names[code], "close": s["close"], "chg": s["chg"], "vol": s["vol"]}
+        now = latest(rows)
+        item = {"code": code, "name": names[code], "close": now["close"], "dchg": now["chg"], "chg": s["chg"], "vol": s["vol"]}
         if s["buy"]:
             buy.append(item)
         elif s["avoid"]:
@@ -328,6 +340,7 @@ def main():
         "generated": datetime.now(TPE).strftime("%Y-%m-%d %H:%M"),
         "week": {"start": idx_bars[idx_fi]["start"].isoformat(), "end": idx_bars[idx_fi]["end"].isoformat()},
         "index": status(idx_bars, idx_fi),
+        "index_last": latest(idx_daily),
         "index_prov": status(idx_bars, len(idx_bars) - 1) if idx_fi != len(idx_bars) - 1 else None,
         "counts": {"buy": len(buy), "avoid": len(avoid), "rebound": len(rebound), "hot": len(hot)},
         "buy": sorted(buy, key=lambda x: -x["vol"])[:TOP_N],

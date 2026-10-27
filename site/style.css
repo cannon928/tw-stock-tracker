@@ -188,3 +188,9 @@ tbody tr:hover { background: var(--card2); }
 }
 .fresh { margin: -4px 0 14px; font-size: 13px; color: var(--muted); }
 .fresh b { color: var(--text); }
+.stock-head .asof { font-size: 13px; }
+.chart-top { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; padding: 0 0 4px 4px; }
+.chart-top .legend { padding: 4px 0; }
+.tabs { display: inline-flex; background: var(--bg); border: 1px solid var(--line); border-radius: 8px; padding: 2px; }
+.tabs button { background: none; border: 0; color: var(--muted); font-size: 13px; padding: 4px 14px; border-radius: 6px; cursor: pointer; }
+.tabs button.on { background: var(--card2); color: var(--text); font-weight: 600; }
