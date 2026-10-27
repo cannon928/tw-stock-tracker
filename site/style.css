@@ -186,3 +186,5 @@ tbody tr:hover { background: var(--card2); }
   .rank { width: 16px; }
   .sname { display: block; margin-left: 16px; }
 }
+.fresh { margin: -4px 0 14px; font-size: 13px; color: var(--muted); }
+.fresh b { color: var(--text); }

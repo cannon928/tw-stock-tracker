@@ -61,6 +61,7 @@ function renderHome() {
       <h1>本週訊號</h1>
       <span class="muted">依 ${md(s.week.start)}–${md(s.week.end)} 週K收盤判斷</span>
     </div>
+    <p class="fresh">資料已更新到 <b>${md(s.updated)}</b> 收盤。首頁清單用「已收完的一週」判斷，每週五收盤後才換一次；這週每天的變化請點進個股看「本週暫定」。</p>
     <div class="lists">
       ${listCard("up", "本週建議進場", "週K日出 ＋ 布林中軌之上 ＋ MACD 多頭 ＋ KD 多頭", s.buy, s.counts.buy)}
       ${listCard("down", "本週不建議進場", "週K日落 ＋ MACD 或 KD 轉弱", s.avoid, s.counts.avoid)}
